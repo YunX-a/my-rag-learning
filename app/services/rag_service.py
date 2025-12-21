@@ -45,9 +45,8 @@ class GlobalLazyEmbeddings(Embeddings):
 
 def get_retriever(collection_name: str = settings.COLLECTION_NAME, k: int = 5) -> VectorStoreRetriever:
     """连接 Milvus 并返回检索器"""
-    print(f"DEBUG !!!!!!!!: 正在尝试建立底层连接 -> {settings.MILVUS_HOST}:{settings.MILVUS_PORT}")
+    print(f"正在尝试建立底层连接 -> {settings.MILVUS_HOST}:{settings.MILVUS_PORT}")
     
-    # 核心修复：手动显式连接
     # 强制 PyMilvus 建立名为 "default" 的连接，这样 LangChain 内部会直接复用它
     try:
         if not connections.has_connection("default"):
@@ -62,6 +61,14 @@ def get_retriever(collection_name: str = settings.COLLECTION_NAME, k: int = 5) -
 
     embeddings = GlobalLazyEmbeddings()
     
+    from pymilvus import Collection
+    try:
+        col = Collection(collection_name)
+        col.load()
+        print(f"集合 {collection_name} 已加载至内存")
+    except Exception as e:
+        print(f"加载集合失败: {e}")
+        
     # 在初始化 Milvus 时，显式指定 connection_args
     vector_store = Milvus(
         embedding_function=embeddings,

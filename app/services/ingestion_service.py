@@ -1,12 +1,33 @@
 # app/services/ingestion_service.py
 import os
+from typing import List
 from minio import Minio
 from langchain_community.document_loaders import PyMuPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_milvus import Milvus
+from langchain_core.embeddings import Embeddings 
 from app.core.config import settings
+from app.core.model_loader import get_embedding_model 
 
+# --- 1. 定义同样的适配器类 (保持与 rag_service.py 一致) ---
+class GlobalLazyEmbeddings(Embeddings):
+    def __init__(self):
+        # 从全局加载器获取模型
+        model = get_embedding_model()
+        if model is None:
+            raise ValueError("Fatal Error: Embedding model failed to initialize. Please check docker logs.")
+        self.model = model
+
+    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        # 开启 normalize_embeddings 以优化余弦相似度
+        embeddings = self.model.encode(texts, normalize_embeddings=True)
+        return embeddings.tolist()
+
+    def embed_query(self, text: str) -> List[float]:
+        embedding = self.model.encode(text, normalize_embeddings=True)
+        return embedding.tolist()
+
+# --- Minio 初始化 ---
 def init_minio_client():
     """初始化 Minio 客户端"""
     return Minio(
@@ -53,8 +74,8 @@ def process_and_embed_document(file_path: str, collection_name: str = settings.C
     loader = PyMuPDFLoader(file_path)
     documents = loader.load()
     
-    # 使用 RecursiveCharacterTextSplitter 效果通常比 CharacterTextSplitter 更好
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+    #  优化切分参数：增加重叠量，防止关键句子被切断
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
     splits = text_splitter.split_documents(documents)
     
     if not splits:
@@ -62,7 +83,6 @@ def process_and_embed_document(file_path: str, collection_name: str = settings.C
         return 0
 
     # --- 步骤 3: 注入元数据 (Metadata) ---
-    # 我们把 Minio 的存储路径放到 metadata 里，这样检索时就能找回原件
     for doc in splits:
         doc.metadata["source"] = file_name
         doc.metadata["minio_path"] = minio_path
@@ -70,7 +90,9 @@ def process_and_embed_document(file_path: str, collection_name: str = settings.C
     # --- 步骤 4: 向量化并存入 Milvus ---
     print(f"正在将 {len(splits)} 个文本块存入 Milvus ({settings.MILVUS_HOST})...")
     
-    embeddings = HuggingFaceEmbeddings(model_name=settings.EMBEDDING_MODEL_NAME)
+    #  删除原来的: embeddings = HuggingFaceEmbeddings(...)
+    #  改为统一的:
+    embeddings = GlobalLazyEmbeddings()
     
     # 连接 Milvus
     vector_store = Milvus(
@@ -78,9 +100,12 @@ def process_and_embed_document(file_path: str, collection_name: str = settings.C
         collection_name=collection_name,
         connection_args={
             "host": settings.MILVUS_HOST,
-            "port": settings.MILVUS_PORT
+            "port": str(settings.MILVUS_PORT), # 确保端口是字符串
+            "alias": "default" # 显式指定 alias 比较安全
         },
-        auto_id=True  # 让 Milvus 自动生成 ID
+        auto_id=True,
+        #  关键：确保索引参数一致
+        index_params={"index_type": "IVF_FLAT", "metric_type": "L2", "params": {"nlist": 1024}}
     )
     
     # 写入数据
