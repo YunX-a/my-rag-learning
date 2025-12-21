@@ -1,6 +1,7 @@
+# app/services/rag_service.py
 import json
 import asyncio
-from typing import AsyncGenerator, List
+from typing import AsyncGenerator, List, Optional, Any  # <--- 1. 务必导入 Optional 和 Any
 from pydantic import SecretStr
 from langchain_openai import ChatOpenAI
 from pymilvus import connections
@@ -20,8 +21,6 @@ from app.services.cache_service import get_cache, set_cache
 
 
 # 1. 定义一个适配器类
-# 作用：把我们预加载的 SentenceTransformer "裸模型" 
-# 包装成 LangChain 认识的 "Embeddings" 对象
 class GlobalLazyEmbeddings(Embeddings):
     def __init__(self):
         model = get_embedding_model()
@@ -33,7 +32,6 @@ class GlobalLazyEmbeddings(Embeddings):
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
         # 调用 sentence-transformers 的 encode 方法
-        # normalize_embeddings=True 建议开启，对余弦相似度更好
         embeddings = self.model.encode(texts, normalize_embeddings=True)
         return embeddings.tolist()
 
@@ -47,7 +45,6 @@ def get_retriever(collection_name: str = settings.COLLECTION_NAME, k: int = 5) -
     """连接 Milvus 并返回检索器"""
     print(f"正在尝试建立底层连接 -> {settings.MILVUS_HOST}:{settings.MILVUS_PORT}")
     
-    # 强制 PyMilvus 建立名为 "default" 的连接，这样 LangChain 内部会直接复用它
     try:
         if not connections.has_connection("default"):
             connections.connect(
@@ -69,20 +66,28 @@ def get_retriever(collection_name: str = settings.COLLECTION_NAME, k: int = 5) -
     except Exception as e:
         print(f"加载集合失败: {e}")
         
-    # 在初始化 Milvus 时，显式指定 connection_args
     vector_store = Milvus(
         embedding_function=embeddings,
         collection_name=collection_name,
         connection_args={
             "host": settings.MILVUS_HOST,
-            "port": str(settings.MILVUS_PORT), # 确保端口是字符串
-            "alias": "default" # 强制关联我们上面建立的连接
+            "port": str(settings.MILVUS_PORT), 
+            "alias": "default" 
         },
         auto_id=True
     )
     return vector_store.as_retriever(search_kwargs={"k": k})
 
-async def _save_chat_to_db(db: Session, user_id: int, question: str, answer: str, sources: List = None):
+# -----------------------------------------------------------
+# [修复点 2] 修改类型注解：允许 List 或 None
+# -----------------------------------------------------------
+async def _save_chat_to_db(
+    db: Session, 
+    user_id: int, 
+    question: str, 
+    answer: str, 
+    sources: Optional[List[Any]] = None  # <--- 关键修改：允许 None
+):
     """
     (内部辅助函数) 将问答记录保存到 MySQL
     """
@@ -90,7 +95,7 @@ async def _save_chat_to_db(db: Session, user_id: int, question: str, answer: str
         # 1. 创建新会话
         new_conversation = Conversation(
             user_id=user_id,
-            title=question[:30] # 截取前30字作为标题
+            title=question[:30] 
         )
         db.add(new_conversation)
         db.commit()
@@ -104,12 +109,12 @@ async def _save_chat_to_db(db: Session, user_id: int, question: str, answer: str
         )
         db.add(user_msg)
 
-        # 3. 保存 AI 回答 (🌟 把 sources 存进去)
+        # 3. 保存 AI 回答 (把 sources 存进去)
         ai_msg = Message(
             conversation_id=new_conversation.id,
             role="assistant",
             content=answer,
-            sources=sources # <--- 关键点：这里必须把 sources 传给数据库模型
+            sources=sources 
         )
         db.add(ai_msg)
         
@@ -129,7 +134,7 @@ async def stream_rag_answer(
     collection_name: str = settings.COLLECTION_NAME
 ) -> AsyncGenerator[str, None]:
     """
-    RAG 核心逻辑：缓存 -> 检索 Milvus -> 构造 Prompt -> 流式调用 LLM -> 持久化
+    RAG 核心逻辑
     """
     print(f"--- DEBUG: 进入 RAG 流程，问题: {question} ---")
     
@@ -143,39 +148,34 @@ async def stream_rag_answer(
         
         # 输出引用来源
         yield "\n\n---SOURCES---\n"
-        for src in cached_data["sources"]:
-             yield json.dumps(src, ensure_ascii=False) + "\n"
+        # 确保拿到的是列表，如果是 None 则转为空列表以防万一，但传给 save_db 时 None 也是合法的了
+        cached_sources = cached_data.get("sources")
+        if cached_sources:
+            for src in cached_sources:
+                 yield json.dumps(src, ensure_ascii=False) + "\n"
         
-        # 关键修复：即使命中缓存，也要保存到 MySQL 历史记录
-        await _save_chat_to_db(db, user.id, question, answer, sources=cached_data.get("sources"))
+        # 关键修复：传入 sources
+        await _save_chat_to_db(db, user.id, question, answer, sources=cached_sources)
         return
 
     # === 2. 缓存未命中，开始 RAG ===
     
-    # 获取检索器
     try:
         retriever = get_retriever(collection_name=collection_name)
-        # 修复：之前这里调用了两次 invoke，删掉了一次
         print("--- DEBUG: 开始检索... ---")
         docs = retriever.invoke(question)
         print(f"--- DEBUG: 检索到 {len(docs)} 篇文档 ---")
         if not docs:
             print("--- DEBUG: 没搜到匹配，正在获取推荐参考... ---")
-            # 方案：尝试检索最泛化的内容，或者直接从文件列表里拿前3个
             try:
-                # 再次检索，但这次用一个极简的关键词或者空字符串，获取一些基础资料
                 recommend_docs = retriever.invoke("基础知识") 
-                docs = recommend_docs[:3] # 取前3个作为可能相关的资料
+                docs = recommend_docs[:3] 
             except:
                 docs = []
                 
     except Exception as e:
         print(f"检索出错: {e}")
         docs = []
-
-    # if not docs:
-    #     yield "在知识库中未找到相关内容，无法回答您的问题。"
-    #     return
 
     # 初始化 LLM
     callback = AsyncIteratorCallbackHandler()
@@ -233,10 +233,10 @@ async def stream_rag_answer(
 
         # === 3. 收尾工作：写入缓存 & 写入数据库 ===
         if full_answer:
-            # 写入 Redis (异步后台执行，不阻塞)
+            # 写入 Redis
             asyncio.create_task(set_cache(question, full_answer, doc_metadatas))
             
-            # 写入 MySQL (确保记录历史)
+            # 写入 MySQL (传入 sources)
             await _save_chat_to_db(db, user.id, question, full_answer, sources=doc_metadatas)
 
     print("--- DEBUG: RAG 流程结束 ---")
