@@ -3,7 +3,7 @@ FROM python:3.10-slim
 
 # 2. 设置工作目录
 WORKDIR /app
-
+COPY ./models /models
 # 3. 安装系统依赖 (编译某些库需要)
 # netcat-openbsd 用于启动脚本中的健康检查
 RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources || \

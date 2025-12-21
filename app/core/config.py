@@ -13,8 +13,9 @@ class Settings(BaseSettings):
     # --- 2. 数据库配置 (MySQL) ---
     DB_USER: str = "rag_user"
     DB_PASSWORD: str = "rag_password"
-    DB_HOST: str = "localhost"
-    DB_PORT: int = 3306  # 建议用 int
+    #  修改：默认使用 Docker 服务名 'rag_mysql'
+    DB_HOST: str = "rag_mysql"  
+    DB_PORT: int = 3306
     DB_NAME: str = "rag_db"
 
     @property
@@ -22,18 +23,20 @@ class Settings(BaseSettings):
         return f"mysql+pymysql://{self.DB_USER}:{self.DB_PASSWORD}@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
 
     # --- 3. 向量数据库配置 (Milvus) ---
-    # ⚠️ 注意：Docker 运行时这里必须解析为 'milvus-standalone'
-    MILVUS_HOST: str = "localhost" 
+    #  修改：默认使用 Docker 服务名 'milvus-standalone'
+    MILVUS_HOST: str = "milvus-standalone"  
     MILVUS_PORT: int = 19530
     COLLECTION_NAME: str = "rag_collection"
-    EMBEDDING_MODEL_NAME: str = "shibing624/text2vec-base-chinese"
+    #  确保这里指向的是容器内的挂载路径，或者使用线上模型
+    EMBEDDING_MODEL_NAME: str = "/app/models/text2vec-base-chinese"
 
     @property
     def MILVUS_URI(self) -> str:
         return f"http://{self.MILVUS_HOST}:{self.MILVUS_PORT}"
 
     # --- 4. 对象存储配置 (Minio) ---
-    MINIO_ENDPOINT: str = "localhost:9002"
+    #  修改：默认使用 Docker 服务名 'milvus-minio'
+    MINIO_ENDPOINT: str = "milvus-minio:9002"  #  原来是 localhost:9002
     MINIO_ACCESS_KEY: str = "minioadmin"
     MINIO_SECRET_KEY: str = "minioadmin"
     MINIO_BUCKET_NAME: str = "rag-documents"
@@ -48,7 +51,8 @@ class Settings(BaseSettings):
         return timedelta(minutes=self.ACCESS_TOKEN_EXPIRE_MINUTES)
     
     # --- 6. Redis 配置 ---
-    REDIS_HOST: str = "localhost"
+    #  修改：默认使用 Docker 服务名 'rag_redis'
+    REDIS_HOST: str = "rag_redis"  #  原来是 localhost
     REDIS_PORT: int = 6379
     REDIS_DB: int = 0
     CACHE_TTL: int = 3600 
@@ -62,20 +66,18 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
-        # ⚠️ 关键：设为 True 确保环境变量(Docker env) 优先级高于 .env 文件
-        # 如果这里是 False，且你挂载了包含 MILVUS_HOST=localhost 的 .env 文件，
-        # 它可能会覆盖 Docker 的环境变量。
-        case_sensitive=True 
+        #  建议改为 False，防止因为大小写问题导致 Docker 环境变量没被读取
+        case_sensitive=False 
     )
 
 # 实例化配置
 settings = Settings()
 
 # --- 启动自检 (DEBUG) ---
-# 这段代码会在后端启动时直接打印当前生效的配置，助你快速排查
 print("\n" + "="*50)
-print(f" RAG Backend Configuration Loaded")
+print(f" RAG Backend Configuration Loaded (Docker Mode)")
 print(f"  DB Host:     {settings.DB_HOST}:{settings.DB_PORT}")
 print(f"  Milvus Host: {settings.MILVUS_HOST}:{settings.MILVUS_PORT}")
 print(f"  Redis Host:  {settings.REDIS_HOST}:{settings.REDIS_PORT}")
+print(f"  Minio Endpoint: {settings.MINIO_ENDPOINT}")
 print("="*50 + "\n")

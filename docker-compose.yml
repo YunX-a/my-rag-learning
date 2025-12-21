@@ -109,6 +109,7 @@ services:
       - .:/app
       - /app/.venv
       - /app/__pycache__
+      - ./models:/app/models
     depends_on:
       mysql:
         condition: service_healthy

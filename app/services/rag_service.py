@@ -1,10 +1,12 @@
-# app/services/rag_service.py
 import json
 import asyncio
-from typing import AsyncGenerator
+from typing import AsyncGenerator, List
 from pydantic import SecretStr
 from langchain_openai import ChatOpenAI
-from langchain_huggingface import HuggingFaceEmbeddings
+from pymilvus import connections
+from langchain_core.embeddings import Embeddings 
+from app.core.model_loader import get_embedding_model 
+
 from langchain_milvus import Milvus
 from langchain_core.vectorstores import VectorStoreRetriever
 from langchain.callbacks.streaming_aiter import AsyncIteratorCallbackHandler
@@ -16,26 +18,58 @@ from app.models.user import User
 from app.models.chat import Conversation, Message
 from app.services.cache_service import get_cache, set_cache
 
-# 全局缓存 Embeddings 模型
-_EMBEDDINGS = None
 
-def get_embeddings():
-    global _EMBEDDINGS
-    if _EMBEDDINGS is None:
-        print(f"正在加载 Embedding 模型: {settings.EMBEDDING_MODEL_NAME} ...")
-        _EMBEDDINGS = HuggingFaceEmbeddings(model_name=settings.EMBEDDING_MODEL_NAME)
-    return _EMBEDDINGS
+# 1. 定义一个适配器类
+# 作用：把我们预加载的 SentenceTransformer "裸模型" 
+# 包装成 LangChain 认识的 "Embeddings" 对象
+class GlobalLazyEmbeddings(Embeddings):
+    def __init__(self):
+        model = get_embedding_model()
+        
+        if model is None:
+            raise ValueError("Fatal Error: Embedding model failed to initialize. Please check docker logs.")
+            
+        self.model = model
+
+    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        # 调用 sentence-transformers 的 encode 方法
+        # normalize_embeddings=True 建议开启，对余弦相似度更好
+        embeddings = self.model.encode(texts, normalize_embeddings=True)
+        return embeddings.tolist()
+
+    def embed_query(self, text: str) -> List[float]:
+        # 单条查询编码
+        embedding = self.model.encode(text, normalize_embeddings=True)
+        return embedding.tolist()
+    
 
 def get_retriever(collection_name: str = settings.COLLECTION_NAME, k: int = 5) -> VectorStoreRetriever:
     """连接 Milvus 并返回检索器"""
-    print(f"DEBUG !!!!!!!!: 真实代码正在连接 -> {settings.MILVUS_HOST}:{settings.MILVUS_PORT}")
-    embeddings = get_embeddings()
+    print(f"DEBUG !!!!!!!!: 正在尝试建立底层连接 -> {settings.MILVUS_HOST}:{settings.MILVUS_PORT}")
+    
+    # 核心修复：手动显式连接
+    # 强制 PyMilvus 建立名为 "default" 的连接，这样 LangChain 内部会直接复用它
+    try:
+        if not connections.has_connection("default"):
+            connections.connect(
+                alias="default", 
+                host=settings.MILVUS_HOST, 
+                port=settings.MILVUS_PORT
+            )
+            print(" 底层 PyMilvus 连接成功！")
+    except Exception as e:
+        print(f" 底层连接失败: {e}")
+
+    embeddings = GlobalLazyEmbeddings()
+    
+    # 在初始化 Milvus 时，显式指定 connection_args
     vector_store = Milvus(
         embedding_function=embeddings,
         collection_name=collection_name,
         connection_args={
             "host": settings.MILVUS_HOST,
-            "port": settings.MILVUS_PORT
+            "port": str(settings.MILVUS_PORT), # 确保端口是字符串
+            "alias": "default" # 强制关联我们上面建立的连接
         },
         auto_id=True
     )
@@ -121,9 +155,9 @@ async def stream_rag_answer(
         yield f"检索服务暂时不可用: {e}"
         return
 
-    if not docs:
-        yield "在知识库中未找到相关内容，无法回答您的问题。"
-        return
+    # if not docs:
+    #     yield "在知识库中未找到相关内容，无法回答您的问题。"
+    #     return
 
     # 初始化 LLM
     callback = AsyncIteratorCallbackHandler()
@@ -138,7 +172,12 @@ async def stream_rag_answer(
 
     # 构造 Chain
     template = """
-    你是一个智能、热情的知识库助手。请结合下面的[参考资料]和你的通用知识来回答用户的[问题]。
+    你是一个智能、热情的知识库助手。
+    
+    [任务指令]:
+    1. 如果提供的[参考资料]中有相关信息，请优先结合资料回答。
+    2. 如果[参考资料]为空，或者资料中没有提到相关内容，请直接利用你作为 AI 的通用知识来专业地回答用户的[问题]。
+    3. 在回答时，不要生硬地说“根据资料显示”，要自然地进行对话
     
     [参考资料]:
     {context}
