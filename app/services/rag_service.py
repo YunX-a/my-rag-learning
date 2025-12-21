@@ -82,7 +82,7 @@ def get_retriever(collection_name: str = settings.COLLECTION_NAME, k: int = 5) -
     )
     return vector_store.as_retriever(search_kwargs={"k": k})
 
-async def _save_chat_to_db(db: Session, user_id: int, question: str, answer: str):
+async def _save_chat_to_db(db: Session, user_id: int, question: str, answer: str, sources: List = None):
     """
     (内部辅助函数) 将问答记录保存到 MySQL
     """
@@ -104,11 +104,12 @@ async def _save_chat_to_db(db: Session, user_id: int, question: str, answer: str
         )
         db.add(user_msg)
 
-        # 3. 保存 AI 回答
+        # 3. 保存 AI 回答 (🌟 把 sources 存进去)
         ai_msg = Message(
             conversation_id=new_conversation.id,
             role="assistant",
-            content=answer
+            content=answer,
+            sources=sources # <--- 关键点：这里必须把 sources 传给数据库模型
         )
         db.add(ai_msg)
         
@@ -146,7 +147,7 @@ async def stream_rag_answer(
              yield json.dumps(src, ensure_ascii=False) + "\n"
         
         # 关键修复：即使命中缓存，也要保存到 MySQL 历史记录
-        await _save_chat_to_db(db, user.id, question, answer)
+        await _save_chat_to_db(db, user.id, question, answer, sources=cached_data.get("sources"))
         return
 
     # === 2. 缓存未命中，开始 RAG ===
@@ -236,6 +237,6 @@ async def stream_rag_answer(
             asyncio.create_task(set_cache(question, full_answer, doc_metadatas))
             
             # 写入 MySQL (确保记录历史)
-            await _save_chat_to_db(db, user.id, question, full_answer)
+            await _save_chat_to_db(db, user.id, question, full_answer, sources=doc_metadatas)
 
     print("--- DEBUG: RAG 流程结束 ---")
