@@ -44,8 +44,18 @@
                   @click="loadHistory(chat.id)"
                   :class="{ active: currentChatId === chat.id }"
                 >
-                  <span class="title">{{ chat.title || '无标题会话' }}</span>
-                  <span class="date">{{ formatDate(chat.created_at) }}</span>
+                  <div class="history-content">
+                    <span class="title">{{ chat.title || '无标题会话' }}</span>
+                    <span class="date">{{ formatDate(chat.created_at) }}</span>
+                  </div>
+
+                  <el-button
+                    class="delete-btn"
+                    type="danger"
+                    link
+                    :icon="Delete"
+                    @click.stop="confirmDelete(chat.id)"
+                  ></el-button>
                 </li>
               </ul>
               <div v-if="historyList.length === 0" class="empty-tip">暂无历史记录</div>
@@ -125,8 +135,8 @@
 <script setup lang="ts">
 import { ref, nextTick, onMounted } from 'vue'
 import axios from 'axios'
-import { ElMessage } from 'element-plus'
-import { Upload, Document } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { Upload, Document, Delete } from '@element-plus/icons-vue'
 import { marked } from 'marked'
 
 // --- 基础配置 ---
@@ -205,6 +215,41 @@ const fetchHistory = async () => {
     }
   }
 }
+// --- 删除历史方法 ---
+const confirmDelete = (chatId: number) => {
+  ElMessageBox.confirm(
+    '确定要删除这段对话历史吗？该操作不可恢复。',
+    '提示',
+    {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'warning',
+    }
+  ).then(() => {
+    handleDelete(chatId)
+  }).catch(() => {})
+}
+
+const handleDelete = async (chatId: number) => {
+  try {
+    await axios.delete(`${API_URL}/history/conversations/${chatId}`, {
+      headers: { Authorization: `Bearer ${token.value}` }
+    })
+    
+    ElMessage.success('删除成功')
+    
+    // 1. 从本地列表中移除
+    historyList.value = historyList.value.filter(item => item.id !== chatId)
+    
+    // 2. 如果删除的是当前正在查看的对话，则重置聊天窗口
+    if (currentChatId.value === chatId) {
+      resetChat()
+    }
+  } catch (e) {
+    ElMessage.error('删除失败，请稍后再试')
+    console.error('Delete error:', e)
+  }
+}
 
 // --- 退出登录 ---
 const handleLogout = () => {
@@ -230,6 +275,7 @@ const loadHistory = async (chatId: number) => {
     ElMessage.error('加载历史失败')
   }
 }
+
 
 const resetChat = () => {
   currentChatId.value = null
@@ -479,13 +525,15 @@ const formatDate = (str: string) => {
   border-radius: 3px;
 }
 
-/* 列表项 */
+/* --- 列表基础样式 --- */
 .history-list, .file-list {
   list-style: none;
   padding: 0;
   margin: 0;
 }
-.history-list li, .file-list li {
+
+/* 1. 文件列表保持原样 (纵向排列) */
+.file-list li {
   padding: 12px;
   margin-bottom: 8px;
   border-radius: 6px;
@@ -493,15 +541,42 @@ const formatDate = (str: string) => {
   color: #ececf1;
   transition: background 0.2s;
   display: flex;
-  flex-direction: column;
+  flex-direction: row; /* 文件图标和名字横向 */
+  align-items: center;
 }
+
+/* 2. 历史列表修改 (改为横向布局，以便右侧放删除按钮) */
+.history-list li {
+  padding: 12px;
+  margin-bottom: 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  color: #ececf1;
+  transition: background 0.2s;
+  display: flex;
+  flex-direction: row;    /* 修改：改为横向，包裹内容和删除键 */
+  align-items: center;
+  justify-content: space-between;
+  position: relative;
+}
+
 .history-list li:hover {
   background-color: #2a2b32;
 }
+
 .history-list li.active {
   background-color: #343541;
   border: 1px solid #565869;
 }
+
+/* 历史列表左侧文字区域 */
+.history-list li .history-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column; /* 文字依然是标题在上日期在下 */
+  overflow: hidden;
+}
+
 .history-list li .title {
   font-size: 14px;
   font-weight: 500;
@@ -510,9 +585,26 @@ const formatDate = (str: string) => {
   text-overflow: ellipsis;
   margin-bottom: 4px;
 }
+
 .history-list li .date {
   font-size: 12px;
   color: #8e8ea0;
+}
+
+/* --- 3. 新增：删除按钮样式 --- */
+.delete-btn {
+  display: none; /* 默认隐藏 */
+  padding: 4px;
+  color: #8e8ea0;
+}
+
+.delete-btn:hover {
+  color: #f56c6c !important; /* 悬停变红 */
+}
+
+/* 鼠标移动到 li 上时，显示该 li 内部的删除按钮 */
+.history-list li:hover .delete-btn {
+  display: inline-flex;
 }
 
 .file-list li {
