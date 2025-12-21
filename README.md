@@ -20,11 +20,3 @@
 * **Storage**: Minio (S3 Compatible)
 * **Cache**: Redis
 * **Model**: text2vec-base-chinese (Embedding), DeepSeek-Chat (LLM)
-
-## 快速开始
-
-### 1. 克隆项目
-
-```bash
-git clone [https://gitee.com/your-username/my-rag-learning.git](https://gitee.com/your-username/my-rag-learning.git)
-cd my-rag-learning
