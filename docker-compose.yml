@@ -1,0 +1,125 @@
+version: '3.8'
+
+services:
+  # 1. MySQL
+  mysql:
+    image: mysql:8.0
+    container_name: rag_mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: root_password
+      MYSQL_DATABASE: rag_db
+      MYSQL_USER: rag_user
+      MYSQL_PASSWORD: rag_password
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    command: --default-authentication-plugin=mysql_native_password
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-proot_password"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  # 2. Milvus 依赖: etcd
+  etcd:
+    container_name: milvus-etcd
+    image: quay.io/coreos/etcd:v3.5.5
+    environment:
+      - ETCD_AUTO_COMPACTION_MODE=revision
+      - ETCD_AUTO_COMPACTION_RETENTION=1000
+      - ETCD_QUOTA_BACKEND_BYTES=4294967296
+      - ETCD_SNAPSHOT_COUNT=50000
+    volumes:
+      - etcd_data:/etcd
+    command: etcd -advertise-client-urls=http://127.0.0.1:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
+
+  # 3. Milvus 依赖: minio
+  milvus-minio:
+    container_name: milvus-minio
+    image: minio/minio:RELEASE.2023-03-20T20-16-18Z
+    environment:
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+    ports:
+      - "9001:9001"
+      - "9002:9002"
+    volumes:
+      - minio_data:/minio_data
+    command: minio server /minio_data --console-address ":9001" --address ":9002"
+
+  # 4. Milvus Standalone (已优化防崩溃)
+  milvus:
+    container_name: milvus-standalone
+    # ⚠️ 修改点 1: 锁定稳定版本，v2.4 在 WSL2 下极易崩溃
+    image: milvusdb/milvus:v2.3.13
+    command: ["milvus", "run", "standalone"]
+    environment:
+      ETCD_ENDPOINTS: milvus-etcd:2379
+      MINIO_ADDRESS: milvus-minio:9002
+      MINIO_ACCESS_KEY_ID: minioadmin
+      MINIO_SECRET_ACCESS_KEY: minioadmin
+    volumes:
+      - milvus_data:/var/lib/milvus
+    ports:
+      - "19530:19530"
+      - "9091:9091"
+    depends_on:
+      - "etcd"
+      - "milvus-minio"
+    # ⚠️ 修改点 2: 添加健康检查，让后端知道什么时候可以连
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 30s
+      timeout: 20s
+      retries: 5
+    # ⚠️ 修改点 3: 限制内存，防止 OOM (可选，建议加上)
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+
+  # 5. Redis
+  redis:
+    image: redis:latest
+    container_name: rag_redis
+    ports:
+      - "6379:6379"
+
+  # 6. 后端服务
+  backend:
+    build: .
+    container_name: rag_backend
+    ports:
+      - "8000:8000"
+    # env_file:  <-- 建议注释掉，防止本地 .env 里的 localhost 干扰容器配置
+    #   - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+      - HF_ENDPOINT=https://hf-mirror.com
+      - DB_HOST=rag_mysql
+      # ⚠️ 必须指向容器名
+      - MILVUS_HOST=milvus-standalone
+      - REDIS_HOST=rag_redis
+      - MINIO_ENDPOINT=milvus-minio:9002
+      # 补上 .env 里可能有的关键 Key (按需解开)
+      # - OPENAI_API_KEY=${OPENAI_API_KEY}
+    volumes:
+      - .:/app
+      - /app/.venv
+      - /app/__pycache__
+    depends_on:
+      mysql:
+        condition: service_healthy
+      milvus:
+        # ⚠️ 修改点 4: 等待 Milvus 彻底“健康”再启动，而不只是“启动”
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+volumes:
+  mysql_data:
+  etcd_data:  # 统一命名
+  minio_data: # 统一命名
+  milvus_data: # 统一命名

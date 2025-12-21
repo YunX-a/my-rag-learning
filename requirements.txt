@@ -1,0 +1,42 @@
+# Web框架
+fastapi==0.115.0
+uvicorn[standard]==0.32.0
+pydantic==2.12.0
+python-dotenv==1.1.1
+python-multipart  # 上传文件需要
+pydantic_settings
+
+# LangChain核心
+langchain==0.3.27
+langchain-community==0.3.31
+langchain-core==0.3.78
+langchain-openai==0.3.35
+langchain-huggingface==0.3.1
+langchain-text-splitters==0.3.11
+
+# --- 变更点 1: 向量数据库 (Milvus) ---
+# 移除 langchain-postgres, psycopg2-binary
+pymilvus
+langchain-milvus
+
+# --- 变更点 2: 关系型数据库 (MySQL) ---
+SQLAlchemy==2.0.31
+pymysql  # MySQL 驱动 (替代 psycopg2)
+cryptography # 某些认证插件需要
+
+# --- 变更点 3: 对象存储 (Minio) ---
+minio  # Python Minio 客户端
+
+# PDF处理
+pymupdf==1.26.4
+
+# 认证
+bcrypt
+python-jose[cryptography]==3.3.0
+
+sentence-transformers
+
+passlib[bcrypt]
+reportlab
+
+redis

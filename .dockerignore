@@ -1,0 +1,28 @@
+# .dockerignore
+.git
+.gitignore
+.dockerignore
+.env
+
+# 忽略虚拟环境 (最重要！)
+.venv
+venv
+env
+
+# 忽略缓存
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.DS_Store
+
+# 忽略挂载的数据卷目录 (防止把几GB的数据库文件拷进去)
+volumes
+mysql_data
+milvus_data
+minio_data
+etcd_data
+
+# 如果有前端，忽略这些
+frontend/node_modules
+frontend/dist
