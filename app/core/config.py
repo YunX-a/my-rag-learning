@@ -27,7 +27,6 @@ class Settings(BaseSettings):
     MILVUS_HOST: str = "milvus-standalone"  
     MILVUS_PORT: int = 19530
     COLLECTION_NAME: str = "rag_collection"
-    #  确保这里指向的是容器内的挂载路径，或者使用线上模型
     EMBEDDING_MODEL_NAME: str = "/app/models/text2vec-base-chinese"
 
     @property

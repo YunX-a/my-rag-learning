@@ -21,7 +21,7 @@ async def main():
             llm_api_key=settings.DEEPSEEK_API_KEY,
             llm_base_url=settings.LLM_BASE_URL,
             llm_model=settings.LLM_MODEL_NAME
-        ):
+        ): # type: ignore
             # flush=True 确保流式输出能实时显示
             print(chunk, end="", flush=True)
     except Exception as e:

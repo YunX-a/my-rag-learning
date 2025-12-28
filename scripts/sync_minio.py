@@ -16,10 +16,10 @@ def sync_local_to_minio(local_folder: str = "data/pdfs"):
 
     # 1. 确保 Bucket 存在
     if not minio_client.bucket_exists(bucket_name):
-        print(f"📦 Bucket '{bucket_name}' 不存在，正在创建...")
+        print(f" Bucket '{bucket_name}' 不存在，正在创建...")
         minio_client.make_bucket(bucket_name)
 
-    print(f"🚀 开始将 '{local_folder}' 同步到 Minio: {bucket_name} ...")
+    print(f" 开始将 '{local_folder}' 同步到 Minio: {bucket_name} ...")
     
     success_count = 0
     
@@ -42,13 +42,13 @@ def sync_local_to_minio(local_folder: str = "data/pdfs"):
                         local_path,
                         content_type="application/pdf"
                     )
-                    print("✅")
+                    print("成功")
                     success_count += 1
                 except Exception as e:
-                    print(f"❌ 失败: {e}")
+                    print(f"失败: {e}")
 
     print("-" * 50)
-    print(f"🎉 同步完成！共上传 {success_count} 个文件。")
+    print(f"同步完成！共上传 {success_count} 个文件。")
 
 if __name__ == "__main__":
     sync_local_to_minio()

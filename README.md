@@ -1,6 +1,6 @@
 # RAG 知识库助手 (RAG Knowledge Base Assistant)
 
-基于 **FastAPI + LangChain + Milvus + Vue 3** 构建的企业级本地知识库问答系统。支持 PDF 文档上传、切片、向量化存储，并利用 LLM (DeepSeek) 进行基于上下文的智能问答。
+基于 **FastAPI + LangChain + Milvus + Vue 3** 构建的本地知识库问答系统。支持 PDF 文档上传、切片、向量化存储，并利用 LLM (DeepSeek) 进行基于上下文的智能问答。
 
 ## 功能特性
 
@@ -20,3 +20,4 @@
 * **Storage**: Minio (S3 Compatible)
 * **Cache**: Redis
 * **Model**: text2vec-base-chinese (Embedding), DeepSeek-Chat (LLM)
+

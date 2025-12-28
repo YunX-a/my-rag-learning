@@ -1,6 +1,6 @@
 import json
 import hashlib
-import redis.asyncio as redis
+import redis.asyncio as redis # type: ignore
 from typing import Optional, Dict, Any
 from app.core.config import settings
 
