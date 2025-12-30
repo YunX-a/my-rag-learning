@@ -45,6 +45,8 @@ async def upload_document(file: UploadFile = File(...)):
     """
     上传 PDF 文档 -> 存入 Minio -> 写入 Milvus
     """
+    allowed_extensions = (".pdf", ".txt")
+    
     if not file.filename:
         raise HTTPException(status_code=400, detail="Filename is missing")
 

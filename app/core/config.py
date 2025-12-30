@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     MILVUS_HOST: str = "milvus-standalone"  
     MILVUS_PORT: int = 19530
     COLLECTION_NAME: str = "rag_collection"
-    EMBEDDING_MODEL_NAME: str = "/app/models/text2vec-base-chinese"
+    EMBEDDING_MODEL_NAME: str = "/app/models/bge-base-zh-v1.5"
 
     @property
     def MILVUS_URI(self) -> str:

@@ -40,3 +40,5 @@ passlib[bcrypt]
 reportlab
 
 redis
+
+modelscope

@@ -2,14 +2,14 @@
 import os
 from typing import List
 from minio import Minio
-from langchain_community.document_loaders import PyMuPDFLoader
+from langchain_community.document_loaders import PyMuPDFLoader, TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_milvus import Milvus
 from langchain_core.embeddings import Embeddings 
 from app.core.config import settings
 from app.core.model_loader import get_embedding_model 
 
-# --- 1. 定义同样的适配器类 (保持与 rag_service.py 一致) ---
+# --- 1. 定义适配器类 (必须包含在这里) ---
 class GlobalLazyEmbeddings(Embeddings):
     def __init__(self):
         # 从全局加载器获取模型
@@ -58,7 +58,7 @@ def upload_to_minio(file_path: str, object_name: str) -> str:
 
 def process_and_embed_document(file_path: str, collection_name: str = settings.COLLECTION_NAME):
     """
-    全流程处理：上传 Minio -> 解析 PDF -> 切分 -> 向量化 -> 存入 Milvus
+    全流程处理：上传 Minio -> 解析 PDF/TXT -> 切分 -> 向量化 -> 存入 Milvus
     """
     file_name = os.path.basename(file_path)
     
@@ -67,15 +67,31 @@ def process_and_embed_document(file_path: str, collection_name: str = settings.C
         minio_path = upload_to_minio(file_path, file_name)
     except Exception as e:
         print(f"Minio 上传失败: {e}")
-        return 0
+        # 如果上传失败，我们可以选择继续或者返回，这里演示继续处理
+        minio_path = f"local_error/{file_name}"
 
     # --- 步骤 2: 加载与切分文档 ---
-    print(f"正在解析 PDF: {file_path}")
-    loader = PyMuPDFLoader(file_path)
+    print(f"正在解析文档: {file_path}")
+    loader = None
+    if file_path.lower().endswith(".pdf"):
+        loader = PyMuPDFLoader(file_path)
+    elif file_path.lower().endswith(".txt"):
+        loader = TextLoader(file_path, encoding="utf-8")
+    else:
+        print("不支持的文件格式")
+        return 0
+
+    if not loader:
+        return 0
+
     documents = loader.load()
     
-    #  优化切分参数：增加重叠量，防止关键句子被切断
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
+    # 优化切分参数：针对 BGE 模型和中文优化
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=600, 
+        chunk_overlap=100,
+        separators=["\n\n", "\n", "。", "！", "？", " ", ""]
+    )
     splits = text_splitter.split_documents(documents)
     
     if not splits:
@@ -90,8 +106,6 @@ def process_and_embed_document(file_path: str, collection_name: str = settings.C
     # --- 步骤 4: 向量化并存入 Milvus ---
     print(f"正在将 {len(splits)} 个文本块存入 Milvus ({settings.MILVUS_HOST})...")
     
-    #  删除原来的: embeddings = HuggingFaceEmbeddings(...)
-    #  改为统一的:
     embeddings = GlobalLazyEmbeddings()
     
     # 连接 Milvus
@@ -100,11 +114,11 @@ def process_and_embed_document(file_path: str, collection_name: str = settings.C
         collection_name=collection_name,
         connection_args={
             "host": settings.MILVUS_HOST,
-            "port": str(settings.MILVUS_PORT), # 确保端口是字符串
-            "alias": "default" # 显式指定 alias 比较安全
+            "port": str(settings.MILVUS_PORT), 
+            "alias": "default" 
         },
         auto_id=True,
-        #  关键：确保索引参数一致
+        # 索引参数
         index_params={"index_type": "IVF_FLAT", "metric_type": "L2", "params": {"nlist": 1024}}
     )
     
