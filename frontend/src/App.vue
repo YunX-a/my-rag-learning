@@ -140,8 +140,8 @@ import { Upload, Document, Delete } from '@element-plus/icons-vue'
 import { marked } from 'marked'
 
 // --- 基础配置 ---
-// 确保你的后端地址正确，如果使用 uv 管理的 python 后端，默认可能是 8000 端口
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api'
+// 确保你的后端地址正确，如果使用 uv 管理的 python 后端，默认 8001 端口
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8001/api'
 
 // --- 接口定义 ---
 interface ChatMessage {
@@ -355,7 +355,7 @@ const sendMessage = async () => {
 
   try {
     // 使用 fetch 获取流式响应
-    const response = await fetch(`${API_URL}/rag/chat`, {
+    const response = await fetch(`${API_URL}/agent/chat`, {
       method: 'POST',
       headers: { 
         'Content-Type': 'application/json', 

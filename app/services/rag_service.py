@@ -11,13 +11,17 @@ from app.core.model_loader import get_embedding_model
 from langchain_milvus import Milvus
 from langchain_core.vectorstores import VectorStoreRetriever
 from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.documents import Document
+
 from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.models.user import User
 from app.models.chat import Conversation, Message
 from app.services.cache_service import get_cache, set_cache
+# 引入 ES 服务 (确保你已经创建了 app/services/es_service.py)
+from app.services.es_service import search_keyword
 
-# --- 1. 定义适配器类 (每个需要用的文件里都需要定义，或提取到单独的 common 文件) ---
+# --- 1. 定义适配器类 ---
 class GlobalLazyEmbeddings(Embeddings):
     def __init__(self):
         model = get_embedding_model()
@@ -33,7 +37,51 @@ class GlobalLazyEmbeddings(Embeddings):
         embedding = self.model.encode(text, normalize_embeddings=True)
         return embedding.tolist()
 
-# --- 2. 数据库辅助函数 ---
+# --- 2. RRF 融合算法 (核心新增) ---
+def reciprocal_rank_fusion(results: List[List[Any]], k=60):
+    """
+    RRF 融合算法：合并多路检索结果
+    :param results: 多个列表，包含 Document 或 ES hit 对象
+    """
+    fused_scores = {}
+    
+    for doc_list in results:
+        for rank, item in enumerate(doc_list):
+            # 统一转换为内容字符串和元数据字符串作为唯一 Key
+            if isinstance(item, Document):
+                content = item.page_content
+                # json dumps 保证字典顺序一致，作为唯一标识的一部分
+                meta_str = json.dumps(item.metadata, sort_keys=True, ensure_ascii=False)
+            else:
+                # 兼容可能的其他格式
+                content = str(item)
+                meta_str = "{}"
+
+            key = (content, meta_str)
+            
+            if key not in fused_scores:
+                fused_scores[key] = 0
+            
+            # RRF 公式: score = 1 / (rank + k)
+            fused_scores[key] += 1 / (rank + k)
+            
+    # 按分数倒序排列
+    reranked = sorted(fused_scores.items(), key=lambda x: x[1], reverse=True)
+    
+    # 还原为 Document 对象
+    final_docs = []
+    for (content, meta_str), score in reranked:
+        try:
+            meta = json.loads(meta_str)
+        except:
+            meta = {}
+        # 可以在 metadata 里把 score 加上，方便调试
+        meta["rrf_score"] = score
+        final_docs.append(Document(page_content=content, metadata=meta))
+    
+    return final_docs
+
+# --- 3. 数据库辅助函数 ---
 async def _save_chat_to_db(
     db: Session, 
     user_id: int, 
@@ -41,9 +89,6 @@ async def _save_chat_to_db(
     answer: str, 
     sources: Optional[List[Any]] = None
 ):
-    """
-    (内部辅助函数) 将问答记录保存到 MySQL
-    """
     try:
         new_conversation = Conversation(user_id=user_id, title=question[:30])
         db.add(new_conversation)
@@ -71,7 +116,6 @@ async def _save_chat_to_db(
         db.rollback()
 
 def get_retriever(collection_name: str = settings.COLLECTION_NAME, k: int = 5) -> VectorStoreRetriever:
-    """连接 Milvus 并返回检索器"""
     try:
         if not connections.has_connection("default"):
             connections.connect(
@@ -96,7 +140,7 @@ def get_retriever(collection_name: str = settings.COLLECTION_NAME, k: int = 5) -
     )
     return vector_store.as_retriever(search_kwargs={"k": k})
 
-# --- 3. 核心 RAG 逻辑 ---
+# --- 4. 核心 RAG 逻辑 (混合检索版) ---
 async def stream_rag_answer(
     question: str,
     llm_api_key: SecretStr,
@@ -106,62 +150,74 @@ async def stream_rag_answer(
     user: User,
     collection_name: str = settings.COLLECTION_NAME
 ) -> AsyncGenerator[str, None]:
-    """
-    RAG 核心逻辑 (修复版)
-    """
-    print(f"--- RAG Start: {question} ---")
+    
+    print(f"--- Hybrid RAG Start: {question} ---")
     
     # === 1. 检查 Redis 缓存 ===
     cached_data = await get_cache(question)
-    
     if cached_data:
-        # --- 命中缓存 ---
-        answer = cached_data["answer"]
-        yield answer
-        
+        yield cached_data["answer"]
         yield "\n\n---SOURCES---\n"
-        # 修复之前的 forSz 拼写错误
         cached_sources = cached_data.get("sources")
         if cached_sources:
             for sz in cached_sources:
                  yield json.dumps(sz, ensure_ascii=False) + "\n"
-        
-        # 存入数据库
-        await _save_chat_to_db(db, user.id, question, answer, sources=cached_sources)
+        await _save_chat_to_db(db, user.id, question, cached_data["answer"], sources=cached_sources)
         return
 
-    # === 2. 检索 (Retrieval) ===
+    # === 2. 混合检索 (Hybrid Search) ===
     try:
-        retriever = get_retriever(collection_name=collection_name, k=4)
-        docs = retriever.invoke(question)
+        # A. 向量检索 (Milvus)
+        print("🔍 执行 Milvus 向量检索...")
+        retriever = get_retriever(collection_name=collection_name, k=5)
+        milvus_docs = retriever.invoke(question)
         
-        if docs:
-            # 构建上下文
-            context_text = "\n\n------\n\n".join([doc.page_content for doc in docs])
+        # B. 关键词检索 (ES)
+        print("🔍 执行 ES 关键词检索...")
+        es_hits = search_keyword(question, k=5)
+        es_docs = []
+        for hit in es_hits:
+            source = hit["_source"]
+            # 统一转为 Document
+            es_docs.append(Document(
+                page_content=source.get("content", ""),
+                metadata={k: v for k, v in source.items() if k != "content"}
+            ))
+
+        # C. RRF 融合
+        print(f"⚗️ 执行 RRF 融合 (向量: {len(milvus_docs)}, 关键词: {len(es_docs)})...")
+        final_docs = reciprocal_rank_fusion([milvus_docs, es_docs])
+        
+        # 取前 6 个
+        used_docs = final_docs[:6]
+        
+        if used_docs:
+            context_text = "\n\n------\n\n".join([d.page_content for d in used_docs])
         else:
             context_text = "没有找到相关文档，请依据你的通用知识回答。"
-            
-    except Exception as e:
-        print(f"检索出错: {e}")
-        docs = []
-        context_text = ""
 
-    doc_metadatas = [doc.metadata for doc in docs]
+    except Exception as e:
+        print(f"检索过程出错: {e}")
+        used_docs = []
+        context_text = ""
+    
+    # [关键修复]：在这里根据 used_docs 定义 doc_metadatas，供后续使用
+    doc_metadatas = [doc.metadata for doc in used_docs]
 
     # === 3. 构建 Prompt ===
-    system_prompt = f"""你是一个专业的助手。
-                        请依据下方的【参考资料】来回答用户的【问题】。
+    system_prompt = f"""你是一个专业的知识库助手。
+请结合下方的【参考资料】来回答用户的【问题】。
+如果参考资料中有多个观点，请综合回答。
 
-                        【参考资料】:
-                        {context_text}
+【参考资料】:
+{context_text}
 
-                        要求：
-                        1. 若参考资料包含答案，请详细回答。
-                        2. 若无相关资料，请利用你的知识回答，并说明资料中未提及。
-                    """
+要求：
+1. 引用资料中的事实来支持你的观点。
+2. 如果资料不足，请诚实说明。
+"""
 
     # === 4. 生成 (Generation) ===
-    # 实例化 LLM
     llm = ChatOpenAI(
         api_key=llm_api_key,
         base_url=llm_base_url,
@@ -173,8 +229,6 @@ async def stream_rag_answer(
     full_answer = ""
     
     try:
-        # 修复点：直接遍历 astream，不需要 create_task
-        # astream 返回的是 BaseMessageChunk，我们需要转成字符串
         messages = [
             SystemMessage(content=system_prompt),
             HumanMessage(content=question)
@@ -183,7 +237,7 @@ async def stream_rag_answer(
         async for chunk in llm.astream(messages):
             content = chunk.content
             if content:
-                full_answer += str(content) # 确保是字符串
+                full_answer += str(content)
                 yield str(content)
                 
     except Exception as e:
@@ -191,12 +245,11 @@ async def stream_rag_answer(
         yield f"\n[生成中断: {e}]"
     
     # === 5. 收尾 ===
-    # 输出引用来源
     yield "\n\n---SOURCES---\n"
+    # 这里 doc_metadatas 已经被正确定义了
     for meta in doc_metadatas:
         yield json.dumps(meta, ensure_ascii=False) + "\n"
 
-    # 写入缓存 & 数据库
     if full_answer:
         asyncio.create_task(set_cache(question, full_answer, doc_metadatas))
         await _save_chat_to_db(db, user.id, question, full_answer, sources=doc_metadatas)

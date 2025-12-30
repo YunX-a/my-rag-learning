@@ -42,3 +42,4 @@ reportlab
 redis
 
 modelscope
+elasticsearch==8.11.1

@@ -8,6 +8,7 @@ from langchain_milvus import Milvus
 from langchain_core.embeddings import Embeddings 
 from app.core.config import settings
 from app.core.model_loader import get_embedding_model 
+from app.services.es_service import create_index_if_not_exists, index_document 
 
 # --- 1. 定义适配器类 (必须包含在这里) ---
 class GlobalLazyEmbeddings(Embeddings):
@@ -125,5 +126,19 @@ def process_and_embed_document(file_path: str, collection_name: str = settings.C
     # 写入数据
     vector_store.add_documents(splits)
     print("写入 Milvus 完成！")
+    
+    # 同时存入 Elasticsearch 
+    print("正在同步写入 Elasticsearch...")
+    create_index_if_not_exists()
+    
+    for i, doc in enumerate(splits):
+        # 构造一个唯一的 ID，方便后续管理
+        doc_id = f"{file_name}_{i}"
+        index_document(
+            doc_id=doc_id,
+            content=doc.page_content,
+            metadata=doc.metadata
+        )
+    print("ES 写入完成！")
     
     return len(splits)

@@ -55,7 +55,7 @@ class Settings(BaseSettings):
     REDIS_PORT: int = 6379
     REDIS_DB: int = 0
     CACHE_TTL: int = 3600 
-
+    
     @property
     def REDIS_URL(self) -> str:
         return f"redis://{self.REDIS_HOST}:{self.REDIS_PORT}/{self.REDIS_DB}"
@@ -68,6 +68,15 @@ class Settings(BaseSettings):
         #  建议改为 False，防止因为大小写问题导致 Docker 环境变量没被读取
         case_sensitive=False 
     )
+    
+    # --- 7. Elasticsearch 配置 ---
+    ES_HOST: str = "rag_elasticsearch" # 本地开发可能需要改为 localhost，Docker内用服务名
+    ES_PORT: int = 9200
+    ES_INDEX: str = "rag_documents"
+    
+    @property
+    def ES_URL(self) -> str:
+        return f"http://{self.ES_HOST}:{self.ES_PORT}"
 
 # 实例化配置
 settings = Settings()

@@ -1,15 +1,28 @@
 # app/main.py
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api.routers import users, rag, history
-from app.core.config import settings
+from contextlib import asynccontextmanager
+# CAN: 1. 务必在这里导入 agent
+from app.api.routers import users, rag, history, agent 
+from app.db.session import engine
+from app.models.user import Base
+from app.core.model_loader import load_model_on_startup
 
-app = FastAPI(title="RAG Chatbot API")
+# 自动建表
+Base.metadata.create_all(bind=engine)
 
-# 配置 CORS (允许前端访问)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # 启动时加载模型
+    load_model_on_startup()
+    yield
+    print("系统关闭")
+
+app = FastAPI(title="RAG Backend", lifespan=lifespan)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # 生产环境建议改为具体的 ["http://localhost:5173"]
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -20,11 +33,9 @@ app.include_router(users.router, prefix="/api/users", tags=["users"])
 app.include_router(rag.router, prefix="/api/rag", tags=["rag"])
 app.include_router(history.router, prefix="/api/history", tags=["history"])
 
+# CAN: 2. 注册 Agent 路由 (没有这一行，访问就会报 404 Not Found)
+app.include_router(agent.router, prefix="/api/agent", tags=["agent"])
+
 @app.get("/")
 def read_root():
-    return {"message": "Welcome to RAG Chatbot API. Docs at /docs"}
-
-if __name__ == "__main__":
-    import uvicorn
-    # 允许在 0.0.0.0 上运行以便局域网访问
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)
+    return {"message": "RAG Backend is running!"}

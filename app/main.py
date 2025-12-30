@@ -2,7 +2,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
-from app.api.routers import users, rag, history
+from app.api.routers import users, rag, history, agent
 from app.db.session import engine
 from app.models.user import Base
 from app.core.model_loader import load_model_on_startup
@@ -32,6 +32,7 @@ app.add_middleware(
 app.include_router(users.router, prefix="/api/users", tags=["users"])
 app.include_router(rag.router, prefix="/api/rag", tags=["rag"])
 app.include_router(history.router, prefix="/api/history", tags=["history"])
+app.include_router(agent.router, prefix="/api/agent", tags=["agent"])
 
 @app.get("/")
 def read_root():
